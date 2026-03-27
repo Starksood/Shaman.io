@@ -1,0 +1,14 @@
+{
+  "name": "shamanos",
+  "version": "0.1.0",
+  "description": "SHAMAN.OS — Digital Spirit Guide",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "setup": "bash scripts/setup_whisper.sh && bash scripts/setup_kokoro.sh"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "electron": "^41.0.4"
+  }
+}

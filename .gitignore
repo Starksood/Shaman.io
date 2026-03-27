@@ -1,0 +1,33 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Large model files — do not commit
+*.gguf
+*.bin
+*.safetensors
+shamanos_adapter/
+shamanos_merged/
+shamanos_checkpoints/
+shamanos_app/models/whisper.cpp/
+shamanos_app/models/ggml-*.bin
+llama.cpp/
+
+# Temp / output files
+audit_report.json
+test_results.json
+training_metadata.json
+JSONL Files/
+
+# macOS
+.DS_Store
+
+# Electron
+shamanos_app/node_modules/

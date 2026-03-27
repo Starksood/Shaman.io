@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SHAMAN.OS</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #020209;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #bg-canvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 1;
+    }
+
+    #orb-canvas {
+      position: absolute;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: 200px; height: 200px;
+      z-index: 2;
+    }
+
+    .ui-layer {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      pointer-events: none;
+    }
+
+    .app-name {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 4px;
+      color: rgba(160, 220, 255, 0.45);
+      margin-top: 32px;
+    }
+
+    .app-name span {
+      color: rgba(140, 255, 190, 0.6);
+    }
+
+    .status-row {
+      display: flex;
+      flex-direction: row;
+      gap: 6px;
+      align-items: center;
+      margin-top: 4px;
+    }
+
+    .status-dot {
+      width: 4px; height: 4px;
+      border-radius: 50%;
+      background: #3fffa0;
+      animation: pulse 2.2s infinite;
+    }
+
+    .state-label {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 7px;
+      letter-spacing: 2px;
+      color: rgba(63, 255, 160, 0.4);
+      text-transform: uppercase;
+    }
+
+    .orb-zone {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .transcript {
+      width: 80%;
+      text-align: center;
+      min-height: 80px;
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .guide-text {
+      font-family: 'Rajdhani', sans-serif;
+      font-weight: 300;
+      font-size: 15px;
+      color: rgba(195, 220, 255, 0.85);
+      line-height: 1.6;
+      font-style: italic;
+      letter-spacing: 0.3px;
+      opacity: 0;
+      transition: opacity 0.8s ease;
+    }
+
+    .guide-text.visible {
+      opacity: 1;
+    }
+
+    .bottom-row {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      padding-bottom: 32px;
+    }
+
+    .hold-hint {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 7px;
+      letter-spacing: 2px;
+      color: rgba(80, 100, 160, 0.35);
+      text-transform: uppercase;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    @keyframes mic-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(63, 255, 160, 0.4); }
+      70% { box-shadow: 0 0 0 8px rgba(63, 255, 160, 0); }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="bg-canvas"></canvas>
+  <canvas id="orb-canvas" width="200" height="200"></canvas>
+
+  <div class="ui-layer">
+    <div class="app-name">SHAMAN<span>.OS</span></div>
+    <div class="status-row">
+      <div class="status-dot"></div>
+      <div class="state-label">initializing...</div>
+    </div>
+    <div class="orb-zone"></div>
+    <div class="transcript">
+      <div class="guide-text"></div>
+    </div>
+    <div class="bottom-row">
+      <div class="hold-hint">hold to breathe</div>
+    </div>
+  </div>
+
+  <script>
+    // ── State Machine ──────────────────────────────────────────────────────────
+    let appState = 'SETUP'
+    let conversationHistory = []
+    let isSetupDone = false
+    let orbSpeedMultiplier = 1.0
+    let bgSpeedMultiplier = 1.0
+
+    const STATE_LABELS = {
+      IDLE:      'waiting · tap anywhere to speak',
+      SETUP:     'initializing...',
+      LISTENING: 'listening...',
+      THINKING:  'the guide is present...',
+      SPEAKING:  'speaking',
+      HOLD:      'breathe...'
+    }
+
+    const ORB_COLORS = {
+      IDLE:      { h: 260, s: 60,  l: 45 },
+      SETUP:     { h: 0,   s: 0,   l: 40 },
+      LISTENING: { h: 185, s: 70,  l: 50 },
+      THINKING:  { h: 40,  s: 80,  l: 55 },
+      SPEAKING:  { h: 20,  s: 50,  l: 70 },
+      HOLD:      { h: 240, s: 50,  l: 35 }
+    }
+
+    const ORB_SPEEDS = {
+      IDLE: 0.4, SETUP: 0.2, LISTENING: 1.2, THINKING: 0.8, SPEAKING: 1.0, HOLD: 0.15
+    }
+
+    function setState(newState) {
+      appState = newState
+      document.querySelector('.state-label').textContent = STATE_LABELS[newState] || newState
+      setAmbientVolume(newState)
+      orbSpeedMultiplier = ORB_SPEEDS[newState] || 1.0
+      bgSpeedMultiplier = newState === 'THINKING' ? 1.4 : 1.0
+    }
+
+    // ── Voice Loop ─────────────────────────────────────────────────────────────
+    async function startInteraction() {
+      if (!isSetupDone || appState !== 'IDLE') return
+      try {
+        setState('LISTENING')
+        const { success: recOk, audioPath, error: recErr } = await window.shaman.startListening()
+        if (!recOk) { showError(recErr); setState('IDLE'); return }
+
+        setState('THINKING')
+        const { success: sttOk, text, error: sttErr } = await window.shaman.transcribe(audioPath)
+        if (!sttOk || !text.trim()) { setState('IDLE'); return }
+
+        const { success: queryOk, response, error: queryErr } = await window.shaman.queryGuide(text, conversationHistory)
+        if (!queryOk) { showError(queryErr); setState('IDLE'); return }
+
+        conversationHistory.push({ role: 'user', content: text }, { role: 'assistant', content: response })
+        if (conversationHistory.length > 12) conversationHistory = conversationHistory.slice(-12)
+
+        setState('SPEAKING')
+        showTranscript(response)
+        const { success: ttsOk, error: ttsErr } = await window.shaman.speak(response)
+        if (!ttsOk) console.error('TTS failed:', ttsErr)
+        setState('IDLE')
+      } catch (e) {
+        showError(e.message)
+        setState('IDLE')
+      }
+    }
+
+    function showTranscript(text) {
+      const el = document.querySelector('.guide-text')
+      el.classList.remove('visible')
+      setTimeout(() => { el.textContent = '\u201c' + text + '\u201d'; el.classList.add('visible') }, 300)
+    }
+
+    function showError(msg) {
+      const el = document.querySelector('.guide-text')
+      el.textContent = msg
+      el.classList.add('visible')
+      el.style.color = 'rgba(255,100,100,0.7)'
+      setTimeout(() => { el.style.color = ''; el.classList.remove('visible') }, 4000)
+    }
+
+    document.addEventListener('click', () => { if (appState === 'IDLE') startInteraction() })
+
+    // ── HOLD Mode ──────────────────────────────────────────────────────────────
+    let holdTimer = null
+    document.addEventListener('mousedown', () => {
+      holdTimer = setTimeout(activateHoldMode, 600)
+    })
+    document.addEventListener('mouseup', () => clearTimeout(holdTimer))
+
+    function activateHoldMode() {
+      if (appState === 'SPEAKING' || appState === 'THINKING') {
+        setState('HOLD')
+        showTranscript('breathe. in for four. hold for four. out for four.')
+        orbSpeedMultiplier = 0.05
+        bgSpeedMultiplier = 0.05
+        setTimeout(() => {
+          orbSpeedMultiplier = 1.0
+          bgSpeedMultiplier = 1.0
+          setState('IDLE')
+        }, 16000)
+      }
+    }
+
+    // ── Setup / Dependency Check ───────────────────────────────────────────────
+    async function checkDepsAndSetup() {
+      setState('SETUP')
+      const deps = await window.shaman.checkDeps()
+      if (!deps.allReady) {
+        let msg = ''
+        if (!deps.ollama)  msg += 'Ollama not running \u2014 start with: ollama serve\n'
+        if (!deps.whisper) msg += 'Whisper not installed \u2014 run: npm run setup\n'
+        if (!deps.kokoro)  msg += 'Kokoro not installed \u2014 run: npm run setup\n'
+        showError(msg.trim())
+        setTimeout(checkDepsAndSetup, 5000)
+        return
+      }
+      isSetupDone = true
+      setState('IDLE')
+      if (!audioCtx) initAmbientAudio()
+    }
+    document.addEventListener('DOMContentLoaded', checkDepsAndSetup)
+
+    // ── Ambient Audio ──────────────────────────────────────────────────────────
+    let audioCtx = null
+    let masterGain = null
+
+    const VOLUME_MAP = {
+      IDLE: 0.30, LISTENING: 0.12, THINKING: 0.22,
+      SPEAKING: 0.08, HOLD: 0.18, SETUP: 0.00
+    }
+
+    function initAmbientAudio() {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+      masterGain = audioCtx.createGain()
+      masterGain.gain.setValueAtTime(0, audioCtx.currentTime)
+      masterGain.connect(audioCtx.destination)
+      createDrone(40, 0.18)
+      createBinauralBeat(200, 204, 0.08)
+      createSlowPad()
+      createShimmer()
+    }
+
+    function createDrone(freq, gainVal) {
+      const osc    = audioCtx.createOscillator()
+      const gain   = audioCtx.createGain()
+      const filter = audioCtx.createBiquadFilter()
+      const lfo    = audioCtx.createOscillator()
+      const lfoGain = audioCtx.createGain()
+      osc.type = 'sawtooth'
+      osc.frequency.setValueAtTime(freq, audioCtx.currentTime)
+      lfo.frequency.setValueAtTime(0.05, audioCtx.currentTime)
+      lfoGain.gain.setValueAtTime(0.3, audioCtx.currentTime)
+      lfo.connect(lfoGain); lfoGain.connect(osc.frequency); lfo.start()
+      filter.type = 'lowpass'; filter.frequency.setValueAtTime(400, audioCtx.currentTime)
+      gain.gain.setValueAtTime(gainVal, audioCtx.currentTime)
+      osc.connect(filter); filter.connect(gain); gain.connect(masterGain); osc.start()
+    }
+
+    function createBinauralBeat(freqL, freqR, gainVal) {
+      const merger = audioCtx.createChannelMerger(2)
+      merger.connect(masterGain)
+      const oscL  = audioCtx.createOscillator()
+      const oscR  = audioCtx.createOscillator()
+      const gainL = audioCtx.createGain()
+      const gainR = audioCtx.createGain()
+      oscL.frequency.setValueAtTime(freqL, audioCtx.currentTime)
+      oscR.frequency.setValueAtTime(freqR, audioCtx.currentTime)
+      gainL.gain.setValueAtTime(gainVal, audioCtx.currentTime)
+      gainR.gain.setValueAtTime(gainVal, audioCtx.currentTime)
+      oscL.connect(gainL); gainL.connect(merger, 0, 0)
+      oscR.connect(gainR); gainR.connect(merger, 0, 1)
+      oscL.start(); oscR.start()
+    }
+
+    function createSlowPad() {
+      const harmonics = [110, 165, 220, 275]
+      harmonics.forEach((freq, i) => {
+        const osc    = audioCtx.createOscillator()
+        const gain   = audioCtx.createGain()
+        const filter = audioCtx.createBiquadFilter()
+        osc.type = 'sine'; osc.frequency.setValueAtTime(freq, audioCtx.currentTime)
+        filter.type = 'bandpass'
+        filter.frequency.setValueAtTime(freq, audioCtx.currentTime)
+        filter.Q.setValueAtTime(5, audioCtx.currentTime)
+        gain.gain.setValueAtTime(0, audioCtx.currentTime)
+        function swell() {
+          const now = audioCtx.currentTime; const period = 8 + i * 3
+          gain.gain.linearRampToValueAtTime(0.06, now + period / 2)
+          gain.gain.linearRampToValueAtTime(0, now + period)
+          setTimeout(swell, period * 1000)
+        }
+        swell()
+        osc.connect(filter); filter.connect(gain); gain.connect(masterGain); osc.start()
+      })
+    }
+
+    function createShimmer() {
+      function sparkle() {
+        if (!audioCtx) return
+        const osc  = audioCtx.createOscillator()
+        const gain = audioCtx.createGain()
+        osc.frequency.setValueAtTime(1200 + Math.random() * 2400, audioCtx.currentTime)
+        osc.type = 'sine'
+        gain.gain.setValueAtTime(0, audioCtx.currentTime)
+        gain.gain.linearRampToValueAtTime(0.02, audioCtx.currentTime + 0.1)
+        gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.8)
+        osc.connect(gain); gain.connect(masterGain); osc.start(); osc.stop(audioCtx.currentTime + 1)
+        setTimeout(sparkle, 2000 + Math.random() * 6000)
+      }
+      sparkle()
+    }
+
+    function setAmbientVolume(state) {
+      if (!masterGain) return
+      const target = VOLUME_MAP[state] !== undefined ? VOLUME_MAP[state] : 0.2
+      masterGain.gain.linearRampToValueAtTime(target, audioCtx.currentTime + 1.5)
+    }
+
+    // ── Background Canvas Animation ────────────────────────────────────────────
+    const bgCanvas = document.getElementById('bg-canvas')
+    const bgCtx    = bgCanvas.getContext('2d')
+
+    function resizeBgCanvas() {
+      bgCanvas.width  = window.innerWidth
+      bgCanvas.height = window.innerHeight
+    }
+    window.addEventListener('resize', resizeBgCanvas)
+    resizeBgCanvas()
+
+    // Build icosahedron-like 12-vertex polyhedra
+    function makeIcosaVerts(scale) {
+      const t = (1 + Math.sqrt(5)) / 2
+      const verts = [
+        [-1,  t,  0], [ 1,  t,  0], [-1, -t,  0], [ 1, -t,  0],
+        [ 0, -1,  t], [ 0,  1,  t], [ 0, -1, -t], [ 0,  1, -t],
+        [ t,  0, -1], [ t,  0,  1], [-t,  0, -1], [-t,  0,  1]
+      ]
+      return verts.map(v => {
+        const len = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])
+        return [v[0]/len*scale, v[1]/len*scale, v[2]/len*scale]
+      })
+    }
+
+    // Icosahedron edges (30 edges)
+    const ICOSA_EDGES = [
+      [0,1],[0,5],[0,7],[0,10],[0,11],
+      [1,5],[1,7],[1,8],[1,9],
+      [2,3],[2,4],[2,6],[2,10],[2,11],
+      [3,4],[3,6],[3,8],[3,9],
+      [4,5],[4,9],[4,11],
+      [5,9],[5,11],
+      [6,7],[6,8],[6,10],
+      [7,8],[7,10],
+      [8,9],[10,11]
+    ]
+
+    function rotateX(v, a) {
+      const [x, y, z] = v
+      return [x, y*Math.cos(a) - z*Math.sin(a), y*Math.sin(a) + z*Math.cos(a)]
+    }
+    function rotateY(v, a) {
+      const [x, y, z] = v
+      return [x*Math.cos(a) + z*Math.sin(a), y, -x*Math.sin(a) + z*Math.cos(a)]
+    }
+    function project(v, fl, cx, cy) {
+      const z = v[2] + fl
+      const scale = fl / (z > 1 ? z : 1)
+      return [cx + v[0] * scale, cy + v[1] * scale]
+    }
+
+    const poly1Verts = makeIcosaVerts(120)
+    const poly2Verts = makeIcosaVerts(80)
+
+    function drawBackground(t) {
+      const w = bgCanvas.width, h = bgCanvas.height
+      const cx = w / 2, cy = h / 2
+      const fl = 400
+      const spd = bgSpeedMultiplier
+
+      bgCtx.fillStyle = 'rgba(2,2,9,0.15)'
+      bgCtx.fillRect(0, 0, w, h)
+
+      // Polyhedron 1 — counter-clockwise
+      const rx1 = t * 0.18 * spd, ry1 = t * 0.11 * spd
+      const p1 = poly1Verts.map(v => project(rotateY(rotateX(v, rx1), ry1), fl, cx, cy))
+      bgCtx.strokeStyle = 'rgba(100,160,255,0.18)'
+      bgCtx.lineWidth = 0.6
+      bgCtx.beginPath()
+      ICOSA_EDGES.forEach(([a, b]) => {
+        bgCtx.moveTo(p1[a][0], p1[a][1])
+        bgCtx.lineTo(p1[b][0], p1[b][1])
+      })
+      bgCtx.stroke()
+
+      // Polyhedron 2 — opposite rotation
+      const rx2 = -t * 0.13 * spd, ry2 = -t * 0.09 * spd
+      const p2 = poly2Verts.map(v => project(rotateY(rotateX(v, rx2), ry2), fl, cx, cy))
+      bgCtx.strokeStyle = 'rgba(140,100,255,0.14)'
+      bgCtx.lineWidth = 0.5
+      bgCtx.beginPath()
+      ICOSA_EDGES.forEach(([a, b]) => {
+        bgCtx.moveTo(p2[a][0], p2[a][1])
+        bgCtx.lineTo(p2[b][0], p2[b][1])
+      })
+      bgCtx.stroke()
+
+      // Lissajous knot — 3:2 ratio
+      for (let i = 0; i < 360; i++) {
+        const theta = i * (Math.PI / 180)
+        const lx = Math.sin(3 * theta + t * 0.3 * spd) * 0.35 * w + cx
+        const ly = Math.cos(2 * theta + t * 0.2 * spd) * 0.35 * h + cy
+        const hue = (200 + i * 0.5) % 360
+        bgCtx.fillStyle = `hsla(${hue},70%,60%,0.4)`
+        bgCtx.fillRect(lx, ly, 1.2, 1.2)
+      }
+
+      // Spirograph petals (5)
+      for (let p = 0; p < 5; p++) {
+        const baseAngle = p * (2 * Math.PI / 5) + t * 0.1 * spd
+        const R = 120, r = 40, d = 60
+        bgCtx.strokeStyle = `hsla(${200 + p * 30},60%,55%,0.12)`
+        bgCtx.lineWidth = 0.8
+        bgCtx.beginPath()
+        for (let i = 0; i <= 360; i++) {
+          const a = i * (Math.PI / 180)
+          const sx = (R - r) * Math.cos(a + baseAngle) + d * Math.cos((R - r) / r * (a + baseAngle)) + cx
+          const sy = (R - r) * Math.sin(a + baseAngle) - d * Math.sin((R - r) / r * (a + baseAngle)) + cy
+          i === 0 ? bgCtx.moveTo(sx, sy) : bgCtx.lineTo(sx, sy)
+        }
+        bgCtx.stroke()
+      }
+
+      // Corner tendrils (4 bezier curves)
+      const corners = [[0, 0], [w, 0], [w, h], [0, h]]
+      corners.forEach(([ox, oy], idx) => {
+        const tOff = t * 0.7 * spd + idx * Math.PI / 2
+        const len  = 80 + Math.sin(tOff) * 20
+        const dx   = ox === 0 ? 1 : -1
+        const dy   = oy === 0 ? 1 : -1
+        const cp1x = ox + dx * len * 0.5
+        const cp1y = oy + dy * len * 2.0
+        const cp2x = ox + dx * len * 2.0
+        const cp2y = oy + dy * len * 0.5
+        const ex   = ox + dx * len
+        const ey   = oy + dy * len
+        bgCtx.strokeStyle = `hsla(${220 + idx * 20},50%,60%,0.1)`
+        bgCtx.lineWidth = 0.7
+        bgCtx.beginPath()
+        bgCtx.moveTo(ox, oy)
+        bgCtx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, ex, ey)
+        bgCtx.stroke()
+      })
+    }
+
+    // ── Orb Canvas Animation ───────────────────────────────────────────────────
+    const orbCanvas = document.getElementById('orb-canvas')
+    const orbCtx    = orbCanvas.getContext('2d')
+    const ORB_W = 200, ORB_H = 200
+    const ORB_CX = ORB_W / 2, ORB_CY = ORB_H / 2
+
+    function drawOrb(t) {
+      orbCtx.clearRect(0, 0, ORB_W, ORB_H)
+
+      const speed      = orbSpeedMultiplier
+      const colorDef   = ORB_COLORS[appState] || ORB_COLORS.IDLE
+      const baseRadius = 72
+      const numVerts   = 80
+
+      // Helper: build blob points
+      function blobPoints(base, phaseOffset) {
+        const pts = []
+        for (let i = 0; i < numVerts; i++) {
+          const angle = i * (2 * Math.PI / numVerts)
+          let r = base
+          for (let h = 1; h <= 5; h++) {
+            r += Math.sin(h * angle + t * speed * h * 0.3 + phaseOffset) * (20 / h)
+          }
+          pts.push([ORB_CX + r * Math.cos(angle), ORB_CY + r * Math.sin(angle)])
+        }
+        return pts
+      }
+
+      // Draw smooth closed path through points
+      function drawBlob(pts, fillStyle) {
+        orbCtx.beginPath()
+        const n = pts.length
+        for (let i = 0; i < n; i++) {
+          const curr = pts[i]
+          const next = pts[(i + 1) % n]
+          const mx   = (curr[0] + next[0]) / 2
+          const my   = (curr[1] + next[1]) / 2
+          if (i === 0) orbCtx.moveTo(mx, my)
+          else orbCtx.quadraticCurveTo(curr[0], curr[1], mx, my)
+        }
+        orbCtx.closePath()
+        orbCtx.fillStyle = fillStyle
+        orbCtx.fill()
+      }
+
+      // Outer blob gradient
+      const hue = colorDef.h
+      const sat = colorDef.s
+      const lit = colorDef.l
+      const outerPts = blobPoints(baseRadius, 0)
+      const grad = orbCtx.createRadialGradient(ORB_CX, ORB_CY, 0, ORB_CX, ORB_CY, baseRadius * 1.4)
+      grad.addColorStop(0,   `hsla(${hue},${sat}%,${Math.min(lit + 20, 90)}%,0.85)`)
+      grad.addColorStop(0.6, `hsla(${hue},${sat}%,${lit}%,0.65)`)
+      grad.addColorStop(1,   `hsla(${hue},${sat}%,${Math.max(lit - 15, 10)}%,0.0)`)
+      drawBlob(outerPts, grad)
+
+      // Inner blob — 0.6× radius, counter-phase
+      const innerBase = baseRadius * 0.6
+      const innerPts  = blobPoints(innerBase, Math.PI)
+      const innerGrad = orbCtx.createRadialGradient(ORB_CX, ORB_CY, 0, ORB_CX, ORB_CY, innerBase * 1.4)
+      innerGrad.addColorStop(0,   `hsla(${(hue + 30) % 360},${sat}%,${Math.min(lit + 30, 95)}%,0.6)`)
+      innerGrad.addColorStop(1,   `hsla(${hue},${sat}%,${lit}%,0.0)`)
+      drawBlob(innerPts, innerGrad)
+
+      // Star-tetrahedron: two equilateral triangles counter-rotating
+      function drawTriangle(rotAngle, alpha) {
+        orbCtx.save()
+        orbCtx.translate(ORB_CX, ORB_CY)
+        orbCtx.rotate(rotAngle)
+        const r = baseRadius * 0.55
+        orbCtx.beginPath()
+        for (let i = 0; i < 3; i++) {
+          const a = i * (2 * Math.PI / 3) - Math.PI / 2
+          i === 0 ? orbCtx.moveTo(r * Math.cos(a), r * Math.sin(a))
+                  : orbCtx.lineTo(r * Math.cos(a), r * Math.sin(a))
+        }
+        orbCtx.closePath()
+        orbCtx.strokeStyle = `hsla(${hue},${sat}%,${Math.min(lit + 25, 90)}%,${alpha})`
+        orbCtx.lineWidth = 0.8
+        orbCtx.stroke()
+        orbCtx.restore()
+      }
+      drawTriangle( t * speed * 0.4,  0.45)
+      drawTriangle(-t * speed * 0.4,  0.35)
+
+      // 12 radial spokes
+      for (let s = 0; s < 12; s++) {
+        const angle  = s * (2 * Math.PI / 12) + t * speed * 0.1
+        const length = baseRadius * 1.4 + Math.sin(t * speed * 2 + s) * 15
+        orbCtx.beginPath()
+        orbCtx.moveTo(ORB_CX, ORB_CY)
+        orbCtx.lineTo(
+          ORB_CX + Math.cos(angle) * length,
+          ORB_CY + Math.sin(angle) * length
+        )
+        orbCtx.strokeStyle = `hsla(${hue},${sat}%,${lit}%,0.15)`
+        orbCtx.lineWidth = 0.6
+        orbCtx.stroke()
+      }
+    }
+
+    // ── Animation Loop ─────────────────────────────────────────────────────────
+    let startTime = null
+
+    function animLoop(ts) {
+      if (!startTime) startTime = ts
+      const t = (ts - startTime) / 1000
+      drawBackground(t)
+      drawOrb(t)
+      requestAnimationFrame(animLoop)
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      requestAnimationFrame(animLoop)
+    })
+  </script>
+</body>
+</html>
