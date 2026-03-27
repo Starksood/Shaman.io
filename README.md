@@ -8,6 +8,8 @@ The project has two parts:
 - **`shamanos_training/`** — Fine-tune pipeline that produces the `shamanos` Ollama model
 
 ---
+<img src ="https://github.com/Starksood/Shaman.io/blob/main/Screenshot%202026-03-26%20at%2022.01.56.png">
+<img src ="https://github.com/Starksood/Shaman.io/blob/main/Screenshot%202026-03-26%20at%2022.02.26.png">
 
 
 ## How it works
